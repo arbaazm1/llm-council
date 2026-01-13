@@ -14,7 +14,8 @@ In a bit more detail, here is what happens when you submit a query:
 
 ## Features
 
-- **Conversation History**: Left sidebar shows all past conversations with auto-generated titles
+- **Multi-turn Conversations**: Engage in an extended dialogue with the council.
+- **Conversation History**: Left sidebar shows all past conversations with auto-generated titles, with the added option to delete
 - **Prompt Template Library**: Collapsible right sidebar for creating and managing reusable prompt templates with dynamic fields
 - **Three-Stage Council Process**: See individual LLM responses, their rankings of each other, and a synthesized final answer
 - **Real-time Streaming**: Watch as each stage completes in real-time
