@@ -10,7 +10,8 @@ import json
 import asyncio
 
 from . import storage
-from .council import run_full_council, generate_conversation_title, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings
+from .council import run_full_council, generate_conversation_title, generate_template_title, stage1_collect_responses, stage2_collect_rankings, stage3_synthesize_final, calculate_aggregate_rankings
+import re
 
 app = FastAPI(title="LLM Council API")
 
@@ -50,6 +51,28 @@ class Conversation(BaseModel):
     messages: List[Dict[str, Any]]
 
 
+class CreateTemplateRequest(BaseModel):
+    """Request to create a new prompt template."""
+    name: str
+    body: str
+
+
+class UpdateTemplateRequest(BaseModel):
+    """Request to update a prompt template."""
+    name: str
+    body: str
+
+
+class PromptTemplate(BaseModel):
+    """Prompt template model."""
+    id: str
+    created_at: str
+    updated_at: str
+    name: str
+    body: str
+    fields: List[str]
+
+
 @app.get("/")
 async def root():
     """Health check endpoint."""
@@ -79,6 +102,15 @@ async def get_conversation(conversation_id: str):
     return conversation
 
 
+@app.delete("/api/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: str):
+    """Delete a specific conversation."""
+    success = storage.delete_conversation(conversation_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"success": True, "message": "Conversation deleted"}
+
+
 @app.post("/api/conversations/{conversation_id}/message")
 async def send_message(conversation_id: str, request: SendMessageRequest):
     """
@@ -93,6 +125,9 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
     # Check if this is the first message
     is_first_message = len(conversation["messages"]) == 0
 
+    # Get conversation history (before adding the new message)
+    conversation_history = conversation["messages"]
+
     # Add user message
     storage.add_user_message(conversation_id, request.content)
 
@@ -101,9 +136,10 @@ async def send_message(conversation_id: str, request: SendMessageRequest):
         title = await generate_conversation_title(request.content)
         storage.update_conversation_title(conversation_id, title)
 
-    # Run the 3-stage council process
+    # Run the 3-stage council process with conversation history
     stage1_results, stage2_results, stage3_result, metadata = await run_full_council(
-        request.content
+        request.content,
+        conversation_history
     )
 
     # Add assistant message with all stages
@@ -137,8 +173,14 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
     # Check if this is the first message
     is_first_message = len(conversation["messages"]) == 0
 
+    # Get conversation history (before adding the new message)
+    conversation_history = conversation["messages"]
+
     async def event_generator():
         try:
+            # Mark conversation as processing
+            storage.set_conversation_processing(conversation_id, True)
+            
             # Add user message
             storage.add_user_message(conversation_id, request.content)
 
@@ -147,9 +189,9 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             if is_first_message:
                 title_task = asyncio.create_task(generate_conversation_title(request.content))
 
-            # Stage 1: Collect responses
+            # Stage 1: Collect responses with conversation history
             yield f"data: {json.dumps({'type': 'stage1_start'})}\n\n"
-            stage1_results = await stage1_collect_responses(request.content)
+            stage1_results = await stage1_collect_responses(request.content, conversation_history)
             yield f"data: {json.dumps({'type': 'stage1_complete', 'data': stage1_results})}\n\n"
 
             # Stage 2: Collect rankings
@@ -177,10 +219,15 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
                 stage3_result
             )
 
+            # Mark conversation as not processing
+            storage.set_conversation_processing(conversation_id, False)
+
             # Send completion event
             yield f"data: {json.dumps({'type': 'complete'})}\n\n"
 
         except Exception as e:
+            # Mark conversation as not processing on error
+            storage.set_conversation_processing(conversation_id, False)
             # Send error event
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
@@ -192,6 +239,81 @@ async def send_message_stream(conversation_id: str, request: SendMessageRequest)
             "Connection": "keep-alive",
         }
     )
+
+
+def extract_template_fields(body: str) -> List[str]:
+    """Extract field names from template body (fields are in {{field_name}} format)."""
+    pattern = r'\{\{(\w+)\}\}'
+    matches = re.findall(pattern, body)
+    # Return unique fields in order of appearance
+    seen = set()
+    unique_fields = []
+    for field in matches:
+        if field not in seen:
+            seen.add(field)
+            unique_fields.append(field)
+    return unique_fields
+
+
+@app.get("/api/templates", response_model=List[PromptTemplate])
+async def list_templates():
+    """List all prompt templates."""
+    return storage.list_templates()
+
+
+@app.post("/api/templates", response_model=PromptTemplate)
+async def create_template(request: CreateTemplateRequest):
+    """Create a new prompt template."""
+    template_id = str(uuid.uuid4())
+    
+    # Extract fields from the body
+    fields = extract_template_fields(request.body)
+    
+    # Generate a name if empty
+    name = request.name.strip()
+    if not name:
+        # Use AI to generate a descriptive title
+        name = await generate_template_title(request.body)
+    
+    template = storage.create_template(template_id, name, request.body, fields)
+    return template
+
+
+@app.get("/api/templates/{template_id}", response_model=PromptTemplate)
+async def get_template(template_id: str):
+    """Get a specific template."""
+    template = storage.get_template(template_id)
+    if template is None:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return template
+
+
+@app.put("/api/templates/{template_id}", response_model=PromptTemplate)
+async def update_template(template_id: str, request: UpdateTemplateRequest):
+    """Update an existing template."""
+    # Extract fields from the body
+    fields = extract_template_fields(request.body)
+    
+    # Generate a name if empty
+    name = request.name.strip()
+    if not name:
+        # Generate name from first line or first 50 chars of body
+        first_line = request.body.split('\n')[0].strip()
+        name = first_line[:50] if first_line else "Untitled Template"
+    
+    template = storage.update_template(template_id, name, request.body, fields)
+    if template is None:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return template
+
+
+@app.delete("/api/templates/{template_id}")
+async def delete_template(template_id: str):
+    """Delete a template."""
+    success = storage.delete_template(template_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return {"success": True, "message": "Template deleted"}
 
 
 if __name__ == "__main__":

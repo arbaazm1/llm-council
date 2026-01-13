@@ -1,6 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
+import PromptTemplateLibrary from './components/PromptTemplateLibrary';
+import DarkModeToggle from './components/DarkModeToggle';
 import { api } from './api';
 import './App.css';
 
@@ -9,11 +11,32 @@ function App() {
   const [currentConversationId, setCurrentConversationId] = useState(null);
   const [currentConversation, setCurrentConversation] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [templates, setTemplates] = useState([]);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isTemplateLibraryOpen, setIsTemplateLibraryOpen] = useState(false);
+  const chatInputSetterRef = useRef(null);
 
   // Load conversations on mount
   useEffect(() => {
     loadConversations();
   }, []);
+
+  // Poll conversations list to update processing status
+  useEffect(() => {
+    // Check if any conversation is processing
+    const hasProcessing = conversations.some(conv => conv.processing);
+    
+    if (!hasProcessing) {
+      return;
+    }
+
+    // Poll every 3 seconds when there are processing conversations
+    const pollInterval = setInterval(() => {
+      loadConversations();
+    }, 3000);
+
+    return () => clearInterval(pollInterval);
+  }, [conversations]);
 
   // Load conversation details when selected
   useEffect(() => {
@@ -21,6 +44,32 @@ function App() {
       loadConversation(currentConversationId);
     }
   }, [currentConversationId]);
+
+  // Poll for updates when conversation is processing
+  useEffect(() => {
+    if (!currentConversation || !currentConversation.processing) {
+      return;
+    }
+
+    // Poll every 2 seconds
+    const pollInterval = setInterval(async () => {
+      try {
+        const updatedConv = await api.getConversation(currentConversationId);
+        setCurrentConversation(updatedConv);
+        
+        // Stop polling when processing is complete
+        if (!updatedConv.processing) {
+          clearInterval(pollInterval);
+          // Refresh conversations list to update message count
+          loadConversations();
+        }
+      } catch (error) {
+        console.error('Failed to poll conversation:', error);
+      }
+    }, 2000);
+
+    return () => clearInterval(pollInterval);
+  }, [currentConversation?.processing, currentConversationId]);
 
   const loadConversations = async () => {
     try {
@@ -44,7 +93,12 @@ function App() {
     try {
       const newConv = await api.createConversation();
       setConversations([
-        { id: newConv.id, created_at: newConv.created_at, message_count: 0 },
+        { 
+          id: newConv.id, 
+          created_at: newConv.created_at, 
+          title: newConv.title || 'New Conversation',
+          message_count: 0 
+        },
         ...conversations,
       ]);
       setCurrentConversationId(newConv.id);
@@ -55,6 +109,73 @@ function App() {
 
   const handleSelectConversation = (id) => {
     setCurrentConversationId(id);
+  };
+
+  const handleDeleteConversation = async (id) => {
+    try {
+      await api.deleteConversation(id);
+      
+      // Remove from conversations list
+      setConversations((prev) => prev.filter((conv) => conv.id !== id));
+      
+      // If the deleted conversation was currently selected, clear the selection
+      if (currentConversationId === id) {
+        setCurrentConversationId(null);
+        setCurrentConversation(null);
+      }
+    } catch (error) {
+      console.error('Failed to delete conversation:', error);
+      alert('Failed to delete conversation. Please try again.');
+    }
+  };
+
+  const loadTemplates = async () => {
+    try {
+      const temps = await api.listTemplates();
+      setTemplates(temps);
+    } catch (error) {
+      console.error('Failed to load templates:', error);
+    }
+  };
+
+  const handleCreateTemplate = async (name, body) => {
+    try {
+      await api.createTemplate(name, body);
+      await loadTemplates();
+    } catch (error) {
+      console.error('Failed to create template:', error);
+      alert('Failed to create template. Please try again.');
+    }
+  };
+
+  const handleUpdateTemplate = async (templateId, name, body) => {
+    try {
+      await api.updateTemplate(templateId, name, body);
+      await loadTemplates();
+    } catch (error) {
+      console.error('Failed to update template:', error);
+      alert('Failed to update template. Please try again.');
+    }
+  };
+
+  const handleDeleteTemplate = async (templateId) => {
+    try {
+      await api.deleteTemplate(templateId);
+      await loadTemplates();
+    } catch (error) {
+      console.error('Failed to delete template:', error);
+      alert('Failed to delete template. Please try again.');
+    }
+  };
+
+  const handleUseTemplate = (promptText) => {
+    if (chatInputSetterRef.current) {
+      chatInputSetterRef.current(promptText);
+    }
+  };
+
+  const handleChatInputChange = (setInputFn) => {
+    chatInputSetterRef.current = setInputFn;
   };
 
   const handleSendMessage = async (content) => {
@@ -183,17 +304,59 @@ function App() {
 
   return (
     <div className="app">
+      {/* Mobile Navigation Buttons */}
+      <button 
+        className="mobile-menu-button"
+        onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+        aria-label="Toggle conversations sidebar"
+      >
+        {isSidebarOpen ? '✕' : '☰'}
+      </button>
+      <button 
+        className="mobile-template-button"
+        onClick={() => setIsTemplateLibraryOpen(!isTemplateLibraryOpen)}
+        aria-label="Toggle templates sidebar"
+      >
+        {isTemplateLibraryOpen ? '✕' : '📝'}
+      </button>
+      
+      {/* Overlay for mobile */}
+      <div 
+        className={`mobile-nav-overlay ${(isSidebarOpen || isTemplateLibraryOpen) ? 'active' : ''}`}
+        onClick={() => {
+          setIsSidebarOpen(false);
+          setIsTemplateLibraryOpen(false);
+        }}
+      />
+      
       <Sidebar
         conversations={conversations}
         currentConversationId={currentConversationId}
         onSelectConversation={handleSelectConversation}
         onNewConversation={handleNewConversation}
+        onDeleteConversation={handleDeleteConversation}
+        isOpen={isSidebarOpen}
+        onClose={() => setIsSidebarOpen(false)}
       />
       <ChatInterface
         conversation={currentConversation}
         onSendMessage={handleSendMessage}
         isLoading={isLoading}
+        onInputChange={handleChatInputChange}
       />
+      <PromptTemplateLibrary
+        templates={templates}
+        onCreateTemplate={handleCreateTemplate}
+        onUpdateTemplate={handleUpdateTemplate}
+        onDeleteTemplate={handleDeleteTemplate}
+        onRefreshTemplates={loadTemplates}
+        onUseTemplate={handleUseTemplate}
+        isOpen={isTemplateLibraryOpen}
+        onClose={() => setIsTemplateLibraryOpen(false)}
+      />
+      
+      {/* Dark Mode Toggle */}
+      <DarkModeToggle />
     </div>
   );
 }

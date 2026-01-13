@@ -1,11 +1,11 @@
-"""JSON-based storage for conversations."""
+"""JSON-based storage for conversations and prompt templates."""
 
 import json
 import os
 from datetime import datetime
 from typing import List, Dict, Any, Optional
 from pathlib import Path
-from .config import DATA_DIR
+from .config import DATA_DIR, TEMPLATES_DIR
 
 
 def ensure_data_dir():
@@ -34,7 +34,8 @@ def create_conversation(conversation_id: str) -> Dict[str, Any]:
         "id": conversation_id,
         "created_at": datetime.utcnow().isoformat(),
         "title": "New Conversation",
-        "messages": []
+        "messages": [],
+        "processing": False
     }
 
     # Save to file
@@ -98,7 +99,8 @@ def list_conversations() -> List[Dict[str, Any]]:
                     "id": data["id"],
                     "created_at": data["created_at"],
                     "title": data.get("title", "New Conversation"),
-                    "message_count": len(data["messages"])
+                    "message_count": len(data["messages"]),
+                    "processing": data.get("processing", False)
                 })
 
     # Sort by creation time, newest first
@@ -170,3 +172,187 @@ def update_conversation_title(conversation_id: str, title: str):
 
     conversation["title"] = title
     save_conversation(conversation)
+
+
+def delete_conversation(conversation_id: str) -> bool:
+    """
+    Delete a conversation.
+
+    Args:
+        conversation_id: Conversation identifier
+
+    Returns:
+        True if deleted, False if not found
+    """
+    path = get_conversation_path(conversation_id)
+    
+    if not os.path.exists(path):
+        return False
+    
+    os.remove(path)
+    return True
+
+
+def set_conversation_processing(conversation_id: str, processing: bool):
+    """
+    Set the processing flag for a conversation.
+
+    Args:
+        conversation_id: Conversation identifier
+        processing: Whether the conversation is being processed
+    """
+    conversation = get_conversation(conversation_id)
+    if conversation is None:
+        raise ValueError(f"Conversation {conversation_id} not found")
+
+    conversation["processing"] = processing
+    save_conversation(conversation)
+
+
+# ============================================================
+# Prompt Template Storage Functions
+# ============================================================
+
+def ensure_templates_dir():
+    """Ensure the templates directory exists."""
+    Path(TEMPLATES_DIR).mkdir(parents=True, exist_ok=True)
+
+
+def get_template_path(template_id: str) -> str:
+    """Get the file path for a template."""
+    return os.path.join(TEMPLATES_DIR, f"{template_id}.json")
+
+
+def create_template(template_id: str, name: str, body: str, fields: List[str]) -> Dict[str, Any]:
+    """
+    Create a new prompt template.
+
+    Args:
+        template_id: Unique identifier for the template
+        name: Name/title of the template
+        body: Template body with {{field}} placeholders
+        fields: List of field names extracted from the body
+
+    Returns:
+        New template dict
+    """
+    ensure_templates_dir()
+
+    template = {
+        "id": template_id,
+        "created_at": datetime.utcnow().isoformat(),
+        "updated_at": datetime.utcnow().isoformat(),
+        "name": name,
+        "body": body,
+        "fields": fields
+    }
+
+    # Save to file
+    path = get_template_path(template_id)
+    with open(path, 'w') as f:
+        json.dump(template, f, indent=2)
+
+    return template
+
+
+def get_template(template_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Load a template from storage.
+
+    Args:
+        template_id: Unique identifier for the template
+
+    Returns:
+        Template dict or None if not found
+    """
+    path = get_template_path(template_id)
+
+    if not os.path.exists(path):
+        return None
+
+    with open(path, 'r') as f:
+        return json.load(f)
+
+
+def save_template(template: Dict[str, Any]):
+    """
+    Save a template to storage.
+
+    Args:
+        template: Template dict to save
+    """
+    ensure_templates_dir()
+
+    # Update the updated_at timestamp
+    template['updated_at'] = datetime.utcnow().isoformat()
+
+    path = get_template_path(template['id'])
+    with open(path, 'w') as f:
+        json.dump(template, f, indent=2)
+
+
+def list_templates() -> List[Dict[str, Any]]:
+    """
+    List all templates.
+
+    Returns:
+        List of template dicts
+    """
+    ensure_templates_dir()
+
+    templates = []
+    for filename in os.listdir(TEMPLATES_DIR):
+        if filename.endswith('.json'):
+            path = os.path.join(TEMPLATES_DIR, filename)
+            with open(path, 'r') as f:
+                data = json.load(f)
+                templates.append(data)
+
+    # Sort by creation time, newest first
+    templates.sort(key=lambda x: x["created_at"], reverse=True)
+
+    return templates
+
+
+def update_template(template_id: str, name: str, body: str, fields: List[str]) -> Optional[Dict[str, Any]]:
+    """
+    Update an existing template.
+
+    Args:
+        template_id: Template identifier
+        name: New name
+        body: New body
+        fields: New fields list
+
+    Returns:
+        Updated template dict or None if not found
+    """
+    template = get_template(template_id)
+    if template is None:
+        return None
+
+    template["name"] = name
+    template["body"] = body
+    template["fields"] = fields
+
+    save_template(template)
+    return template
+
+
+def delete_template(template_id: str) -> bool:
+    """
+    Delete a template.
+
+    Args:
+        template_id: Template identifier
+
+    Returns:
+        True if deleted, False if not found
+    """
+    path = get_template_path(template_id)
+    
+    if not os.path.exists(path):
+        return False
+    
+    os.remove(path)
+    return True

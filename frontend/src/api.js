@@ -47,6 +47,22 @@ export const api = {
   },
 
   /**
+   * Delete a specific conversation.
+   */
+  async deleteConversation(conversationId) {
+    const response = await fetch(
+      `${API_BASE}/api/conversations/${conversationId}`,
+      {
+        method: 'DELETE',
+      }
+    );
+    if (!response.ok) {
+      throw new Error('Failed to delete conversation');
+    }
+    return response.json();
+  },
+
+  /**
    * Send a message in a conversation.
    */
   async sendMessage(conversationId, content) {
@@ -111,5 +127,74 @@ export const api = {
         }
       }
     }
+  },
+
+  /**
+   * List all prompt templates.
+   */
+  async listTemplates() {
+    const response = await fetch(`${API_BASE}/api/templates`);
+    if (!response.ok) {
+      throw new Error('Failed to list templates');
+    }
+    return response.json();
+  },
+
+  /**
+   * Create a new prompt template.
+   */
+  async createTemplate(name, body) {
+    const response = await fetch(`${API_BASE}/api/templates`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ name, body }),
+    });
+    if (!response.ok) {
+      throw new Error('Failed to create template');
+    }
+    return response.json();
+  },
+
+  /**
+   * Get a specific template.
+   */
+  async getTemplate(templateId) {
+    const response = await fetch(`${API_BASE}/api/templates/${templateId}`);
+    if (!response.ok) {
+      throw new Error('Failed to get template');
+    }
+    return response.json();
+  },
+
+  /**
+   * Update a template.
+   */
+  async updateTemplate(templateId, name, body) {
+    const response = await fetch(`${API_BASE}/api/templates/${templateId}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ name, body }),
+    });
+    if (!response.ok) {
+      throw new Error('Failed to update template');
+    }
+    return response.json();
+  },
+
+  /**
+   * Delete a template.
+   */
+  async deleteTemplate(templateId) {
+    const response = await fetch(`${API_BASE}/api/templates/${templateId}`, {
+      method: 'DELETE',
+    });
+    if (!response.ok) {
+      throw new Error('Failed to delete template');
+    }
+    return response.json();
   },
 };

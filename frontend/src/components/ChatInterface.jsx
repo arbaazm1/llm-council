@@ -9,9 +9,21 @@ export default function ChatInterface({
   conversation,
   onSendMessage,
   isLoading,
+  onInputChange,
 }) {
   const [input, setInput] = useState('');
   const messagesEndRef = useRef(null);
+  
+  // Check if conversation is processing (but we're not actively loading via stream)
+  const isProcessingInBackground = conversation?.processing && !isLoading;
+
+  // Notify parent of input setter function once on mount
+  useEffect(() => {
+    if (onInputChange) {
+      onInputChange(setInput);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only run once on mount
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -117,29 +129,34 @@ export default function ChatInterface({
           </div>
         )}
 
+        {isProcessingInBackground && (
+          <div className="loading-indicator">
+            <div className="spinner"></div>
+            <span>Processing in background... (you can navigate away)</span>
+          </div>
+        )}
+
         <div ref={messagesEndRef} />
       </div>
 
-      {conversation.messages.length === 0 && (
-        <form className="input-form" onSubmit={handleSubmit}>
-          <textarea
-            className="message-input"
-            placeholder="Ask your question... (Shift+Enter for new line, Enter to send)"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            disabled={isLoading}
-            rows={3}
-          />
-          <button
-            type="submit"
-            className="send-button"
-            disabled={!input.trim() || isLoading}
-          >
-            Send
-          </button>
-        </form>
-      )}
+      <form className="input-form" onSubmit={handleSubmit}>
+        <textarea
+          className="message-input"
+          placeholder="Ask your question... (Shift+Enter for new line, Enter to send)"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={handleKeyDown}
+          disabled={isLoading || isProcessingInBackground}
+          rows={3}
+        />
+        <button
+          type="submit"
+          className="send-button"
+          disabled={!input.trim() || isLoading || isProcessingInBackground}
+        >
+          Send
+        </button>
+      </form>
     </div>
   );
 }

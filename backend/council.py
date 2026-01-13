@@ -2,32 +2,58 @@
 
 from typing import List, Dict, Any, Tuple
 from .openrouter import query_models_parallel, query_model
-from .config import COUNCIL_MODELS, CHAIRMAN_MODEL
+from .config import COUNCIL_MODELS, CHAIRMAN_MODEL, ENABLE_TOOLS
 
 
-async def stage1_collect_responses(user_query: str) -> List[Dict[str, Any]]:
+async def stage1_collect_responses(user_query: str, conversation_history: List[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """
-    Stage 1: Collect individual responses from all council models.
+    Stage 1: Collect individual responses from all council models with optional tool calling support.
 
     Args:
         user_query: The user's question
+        conversation_history: List of previous messages in the conversation
 
     Returns:
-        List of dicts with 'model' and 'response' keys
+        List of dicts with 'model', 'response', and optional 'tool_calls' keys
     """
-    messages = [{"role": "user", "content": user_query}]
+    # Build message history for the models
+    messages = []
+    
+    if conversation_history:
+        # Convert conversation history to model message format
+        for msg in conversation_history:
+            if msg.get('role') == 'user':
+                messages.append({"role": "user", "content": msg['content']})
+            elif msg.get('role') == 'assistant' and msg.get('stage3'):
+                # Use the final synthesized response from previous turns
+                messages.append({"role": "assistant", "content": msg['stage3']['response']})
+    
+    # Add the current user query
+    messages.append({"role": "user", "content": user_query})
 
-    # Query all models in parallel
-    responses = await query_models_parallel(COUNCIL_MODELS, messages)
+    # Get tool schemas if tools are enabled
+    tools = None
+    if ENABLE_TOOLS:
+        from .tools import get_enabled_tools
+        tools = get_enabled_tools()
+
+    # Query all models in parallel with tool support
+    responses = await query_models_parallel(COUNCIL_MODELS, messages, tools=tools)
 
     # Format results
     stage1_results = []
     for model, response in responses.items():
         if response is not None:  # Only include successful responses
-            stage1_results.append({
+            result = {
                 "model": model,
                 "response": response.get('content', '')
-            })
+            }
+            
+            # Include tool call information if available
+            if response.get('tool_calls'):
+                result['tool_calls'] = response['tool_calls']
+            
+            stage1_results.append(result)
 
     return stage1_results
 
@@ -293,18 +319,57 @@ Title:"""
     return title
 
 
-async def run_full_council(user_query: str) -> Tuple[List, List, Dict, Dict]:
+async def generate_template_title(template_body: str) -> str:
+    """
+    Generate a short title for a prompt template based on its content.
+
+    Args:
+        template_body: The template body text
+
+    Returns:
+        A short title (3-5 words)
+    """
+    title_prompt = f"""Generate a very short title (3-5 words maximum) that describes the purpose of the following prompt template.
+The title should be concise and descriptive. Do not use quotes or punctuation in the title.
+
+Template: {template_body[:500]}
+
+Title:"""
+
+    messages = [{"role": "user", "content": title_prompt}]
+
+    # Use gemini-2.5-flash for title generation (fast and cheap)
+    response = await query_model("google/gemini-2.5-flash", messages, timeout=30.0)
+
+    if response is None:
+        # Fallback to a generic title
+        return "Untitled Template"
+
+    title = response.get('content', 'Untitled Template').strip()
+
+    # Clean up the title - remove quotes, limit length
+    title = title.strip('"\'')
+
+    # Truncate if too long
+    if len(title) > 50:
+        title = title[:47] + "..."
+
+    return title
+
+
+async def run_full_council(user_query: str, conversation_history: List[Dict[str, Any]] = None) -> Tuple[List, List, Dict, Dict]:
     """
     Run the complete 3-stage council process.
 
     Args:
         user_query: The user's question
+        conversation_history: List of previous messages in the conversation
 
     Returns:
         Tuple of (stage1_results, stage2_results, stage3_result, metadata)
     """
     # Stage 1: Collect individual responses
-    stage1_results = await stage1_collect_responses(user_query)
+    stage1_results = await stage1_collect_responses(user_query, conversation_history)
 
     # If no models responded successfully, return error
     if not stage1_results:
